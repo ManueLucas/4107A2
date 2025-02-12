@@ -144,67 +144,163 @@ def thyroid_autoexperiments(filepath):
   #masks for adjusting the hidden layers, 1: turned on. 0: turned off
   raw_X, raw_y = data_preprocessing(filepath)
   test_ratio = 0.2
-  X_train, X_test, y_train, y_test = train_test_split(raw_X, raw_y, test_size=test_ratio)
+  X_trainval, X_test, y_trainval, y_test = train_test_split(raw_X, raw_y, test_size=test_ratio)
   kf = KFold(n_splits=5, shuffle=True, random_state=42)
-  
-  
-  hidden_layers_adjustment = [
-    [0,0,0,0,0,0,0], #remove all layers
-    [1,0,0,0,0,0,0], 
-    [1,0,1,0,0,0,0],
-    [1,0,1,0,1,0,0],
-    [1,0,1,0,1,0,1], #original model
-    [1,1,1,0,1,0,1], #start to interleave layers
-    [1,1,1,1,1,0,1],
-    [1,1,1,1,1,1,1] 
-                              ]
-  best_accuracy = 0
-  best_model = None
-  best_mask = None
-  mask_acc_history = []
-  
-  for mask in hidden_layers_adjustment:
-    hyperparam_dict = {'layers': mask, 'neurons': None}
-    accuracy_history = []
-    
-    for train_index, val_index in kf.split(raw_X):
-      X_train, X_val = raw_X[train_index], raw_X[val_index]
-      y_train, y_val = raw_y[train_index], raw_y[val_index]    
-      model = thyroid_model_FFN(hyperparam_dict) # reset model
-      
-      model, validation_accuracy, _, _ = train_validate(model, X_train, y_train, X_val, y_val)
-      accuracy_history.append(validation_accuracy)
-      if best_accuracy < validation_accuracy:
-        best_accuracy = validation_accuracy
-        best_model = model
-        best_mask = mask
-      
-    averaged_validation_accuracy = mean(accuracy_history)
-    mask_acc_history.append(averaged_validation_accuracy)
-    layers_used = np.array(mask) * np.array([128, 64, 32, 16, 8, 4, 2])
+  full_model_neurons = np.array([128, 64, 32, 16, 8, 4, 2])
 
-    print(f'Averaged validation accuracy for the model:{layers_used} is {averaged_validation_accuracy}')
-  
-  layers_used = np.array(best_mask) * np.array([128, 64, 32, 16, 8, 4, 2])
-  print(f'Best model has validation accuracy of {best_accuracy} with mask {best_mask}')
-  
-  x = np.arange(len(hidden_layers_adjustment))
-  y = np.array(mask_acc_history)
-  plt.bar(x, y)
-  plt.xlabel('Number of Layers')
-  plt.ylabel('Averaged Validation Accuracy')
-  plt.xticks(x, labels=[str(sum(mask)) for mask in hidden_layers_adjustment])
-  plt.title('Validation Accuracy vs. Number of Layers')
-  plt.savefig('layer_validation_accuracy.png')
+  def layer_experiments():
+
+    hidden_layers_adjustment = [
+      [0,0,0,0,0,0,0], #remove all layers
+      [1,0,0,0,0,0,0], 
+      [1,0,1,0,0,0,0],
+      [1,0,1,0,1,0,0],
+      [1,0,1,0,1,0,1], #original model
+      [1,1,1,0,1,0,1], #start to interleave layers
+      [1,1,1,1,1,0,1],
+      [1,1,1,1,1,1,1] 
+                                ]
+    best_accuracy = 0
+    best_mask = None
+    mask_acc_history = []
+    best_training_indices_layer = None
+    best_validation_indices_layer = None
+    
+    for mask in hidden_layers_adjustment:
+      hyperparam_dict = {'layers': mask, 'neurons': None}
+      accuracy_history = []
+      
+      for train_index, val_index in kf.split(X_trainval):
+        X_train, X_val = X_trainval[train_index], X_trainval[val_index] #we split from trainval instead of raw to avoid data leakage
+        y_train, y_val = y_trainval[train_index], y_trainval[val_index]    
+        model = thyroid_model_FFN(hyperparam_dict) # reset model
         
+        model, validation_accuracy, age_mean, age_std = train_validate(model, X_train, y_train, X_val, y_val)
+        accuracy_history.append(validation_accuracy)
+        if best_accuracy < validation_accuracy: #grab best model during validation phase
+          best_accuracy = validation_accuracy
+          model.save('best_layer_model.h5')
+          best_mask = mask
+          best_training_indices_layer = train_index
+          best_validation_indices_layer = val_index
+        
+      averaged_validation_accuracy = mean(accuracy_history)
+      mask_acc_history.append(averaged_validation_accuracy)
+      layers_used = np.array(mask) * full_model_neurons
+
+      print(f'Averaged validation accuracy for the model:{layers_used} is {averaged_validation_accuracy}')
+    
+    layers_used = np.array(best_mask) * full_model_neurons
+    print(f'Best model has validation accuracy of {best_accuracy} with mask {best_mask}')
+    
+    x = np.arange(len(hidden_layers_adjustment))
+    y = np.array(mask_acc_history)
+    plt.bar(x, y)
+    plt.xlabel('Number of Layers')
+    plt.ylabel('Averaged Validation Accuracy')
+    plt.xticks(x, labels=[str(sum(mask)) for mask in hidden_layers_adjustment])
+    plt.title('Validation Accuracy vs. Number of Layers')
+    plt.savefig('layer_validation_accuracy.png')
+    return best_mask, best_training_indices_layer, best_validation_indices_layer
   
   
   #hyperparameters for adjusting neurons in the hidden layers
-  neuron_ratio_adjustment = [1/4, 1/2, 3/4, 1, 5/4, 3/2, 2]
+  def neuron_experiments():
+    neuron_ratio_adjustment = [1/4, 1/2, 3/4, 1, 5/4, 3/2]
+    best_accuracy = 0
+    best_ratio = None
+    neuron_acc_history = []
+    hidden_neurons_history = []
+    best_training_indices_neuron = None
+    best_validation_indices_neuron = None
+    
+    for ratio in neuron_ratio_adjustment:
+      neurons_hyperparams = np.ceil(full_model_neurons * ratio).astype(int).tolist()
+      hidden_neurons_history.append(np.sum(neurons_hyperparams))
+      
+      hyperparam_dict = {'layers': None, 'neurons': neurons_hyperparams}
+      accuracy_history = []
+      
+      for train_index, val_index in kf.split(X_trainval):
+        X_train, X_val = X_trainval[train_index], X_trainval[val_index]
+        y_train, y_val = y_trainval[train_index], y_trainval[val_index]    
+        model = thyroid_model_FFN(hyperparam_dict)
+        
+        model, validation_accuracy, _, _ = train_validate(model, X_train, y_train, X_val, y_val)
+        accuracy_history.append(validation_accuracy)
+        if best_accuracy < validation_accuracy:
+          best_accuracy = validation_accuracy
+          model.save('best_neuron_model.h5')
+          best_ratio = ratio
+          best_training_indices_neuron = train_index
+          best_validation_indices_neuron = val_index
+          
+      #k fold is done
+      averaged_validation_accuracy = mean(accuracy_history)
+      neuron_acc_history.append(averaged_validation_accuracy)
+      print(f'Averaged validation accuracy for the ratio:{ratio} is {averaged_validation_accuracy}')
+      #onto the next ratio...
+    
+    print(f'Best model has validation accuracy of {best_accuracy} with ratio {best_ratio}')
+
+    x = np.array(hidden_neurons_history)
+    y = np.array(neuron_acc_history)
+    plt.bar(x, y, width=50)
+    plt.xlabel('Hidden Layer Neurons')
+    plt.ylabel('Averaged Validation Accuracy')
+    plt.xticks(x, labels=[str(neurons) for neurons in hidden_neurons_history])
+    plt.title('Validation Accuracy vs. Number of Total Neurons in Hidden Layers')
+    plt.savefig('Neuron_validation_accuracy.png')
+    return best_ratio, best_training_indices_neuron, best_validation_indices_neuron
 
   
   #hyperparameters for adjusting the epochs
-  epochs_adjustment = [4, 8, 12, 16, 20, 24]
+  def epoch_experiments():
+    epochs_adjustment = [4, 8, 12, 16, 20, 24]
+    best_accuracy = 0
+    best_ratio = None
+    epoch_acc_history = []
+    best_training_indices_epoch = None
+    best_validation_indices_epoch = None
+    
+    for epoch in epochs_adjustment:      
+      hyperparam_dict = {'layers': None, 'neurons': None}
+      accuracy_history = []
+      
+      for train_index, val_index in kf.split(X_trainval):
+        X_train, X_val = X_trainval[train_index], X_trainval[val_index]
+        y_train, y_val = y_trainval[train_index], y_trainval[val_index]    
+        model = thyroid_model_FFN(hyperparam_dict)
+        
+        model, validation_accuracy, _, _ = train_validate(model, X_train, y_train, X_val, y_val, epochs=epoch)
+        accuracy_history.append(validation_accuracy)
+        if best_accuracy < validation_accuracy:
+          best_accuracy = validation_accuracy
+          model.save('best_epoch_model.h5')
+          best_epoch = epoch
+          best_training_indices_epoch = train_index
+          best_validation_indices_epoch = val_index
+          
+      #k fold is done
+      averaged_validation_accuracy = mean(accuracy_history)
+      epoch_acc_history.append(averaged_validation_accuracy)
+      print(f'Averaged validation accuracy for the epoch:{epoch} is {averaged_validation_accuracy}')
+    
+    print(f'Best model has validation accuracy of {best_accuracy} with epochs {best_epoch}')
+
+    x = np.array(epochs_adjustment)
+    y = np.array(epoch_acc_history)
+    plt.bar(x, y, width=4)
+    plt.xlabel('Epochs')
+    plt.ylabel('Averaged Validation Accuracy')
+    plt.xticks(x, labels=[str(epochs) for epochs in epochs_adjustment])
+    plt.title('Validation Accuracy vs. # of Epochs Trained')
+    plt.savefig('Epochs_validation_accuracy.png')
+    
+    return best_epoch, best_training_indices_epoch, best_validation_indices_epoch
+  
+  epoch_experiments()
+  
   
   
   
