@@ -83,7 +83,7 @@ def train_validate(model, X_train, y_train, X_val, y_val, epochs=10):
   X_train[0] = (X_train[0] - age_mean) / age_std #standardize and normalize age since it's the only numerical feature
   X_val[0] = (X_val[0] - age_mean) / age_std
 
-  history = model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=epochs, batch_size=32)
+  history = model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=epochs, batch_size=32, verbose=0)
   validation_accuracy = history.history['val_accuracy'][-1]  # last validation accuracy
   
   return model, validation_accuracy, age_mean, age_std
@@ -149,7 +149,8 @@ def thyroid_autoexperiments(filepath):
   full_model_neurons = np.array([128, 64, 32, 16, 8, 4, 2])
 
   def layer_experiments():
-
+    
+    
     hidden_layers_adjustment = [
       [0,0,0,0,0,0,0], #remove all layers
       [1,0,0,0,0,0,0], 
@@ -160,6 +161,7 @@ def thyroid_autoexperiments(filepath):
       [1,1,1,1,1,0,1],
       [1,1,1,1,1,1,1] 
                                 ]
+    # validation measures
     best_accuracy = 0
     best_mask = None
     mask_acc_history = []
@@ -195,13 +197,14 @@ def thyroid_autoexperiments(filepath):
     
     x = np.arange(len(hidden_layers_adjustment))
     y = np.array(mask_acc_history)
+    plt.clf()
     plt.bar(x, y)
     plt.xlabel('Number of Layers')
     plt.ylabel('Averaged Validation Accuracy')
     plt.xticks(x, labels=[str(sum(mask)) for mask in hidden_layers_adjustment])
     plt.title('Validation Accuracy vs. Number of Layers')
     plt.savefig('layer_validation_accuracy.png')
-    return best_mask, best_training_indices_layer, best_validation_indices_layer
+    return best_mask, (best_training_indices_layer, best_validation_indices_layer)
   
   
   #hyperparameters for adjusting neurons in the hidden layers
@@ -245,20 +248,20 @@ def thyroid_autoexperiments(filepath):
 
     x = np.array(hidden_neurons_history)
     y = np.array(neuron_acc_history)
+    plt.clf()
     plt.bar(x, y, width=50)
     plt.xlabel('Hidden Layer Neurons')
     plt.ylabel('Averaged Validation Accuracy')
     plt.xticks(x, labels=[str(neurons) for neurons in hidden_neurons_history])
     plt.title('Validation Accuracy vs. Number of Total Neurons in Hidden Layers')
     plt.savefig('Neuron_validation_accuracy.png')
-    return best_ratio, best_training_indices_neuron, best_validation_indices_neuron
+    return best_ratio, (best_training_indices_neuron, best_validation_indices_neuron)
 
   
   #hyperparameters for adjusting the epochs
   def epoch_experiments():
     epochs_adjustment = [4, 8, 12, 16, 20, 24]
     best_accuracy = 0
-    best_ratio = None
     epoch_acc_history = []
     best_training_indices_epoch = None
     best_validation_indices_epoch = None
@@ -290,20 +293,70 @@ def thyroid_autoexperiments(filepath):
 
     x = np.array(epochs_adjustment)
     y = np.array(epoch_acc_history)
-    plt.bar(x, y, width=4)
+    plt.clf()
+    plt.bar(x, y, width=3)
     plt.xlabel('Epochs')
     plt.ylabel('Averaged Validation Accuracy')
     plt.xticks(x, labels=[str(epochs) for epochs in epochs_adjustment])
     plt.title('Validation Accuracy vs. # of Epochs Trained')
     plt.savefig('Epochs_validation_accuracy.png')
     
-    return best_epoch, best_training_indices_epoch, best_validation_indices_epoch
+    return best_epoch, (best_training_indices_epoch, best_validation_indices_epoch)
+  print('Starting layer experiments...')
+  best_layer, layer_splits = layer_experiments()
+  print('Starting neuron experiments...')
+  best_neuron, neuron_splits = neuron_experiments()
+  print('Starting epoch experiments...')
+  best_epoch, epoch_splits = epoch_experiments()
   
-  epoch_experiments()
+  def train_validate_test_performance(layer_param_file, neuron_param_file, epoch_param_file, layer_splits, neuron_splits, epoch_splits, best_layer, best_neuron, best_epoch):
+    best_layer_model = keras.models.load_model(layer_param_file)
+    best_neuron_model = keras.models.load_model(neuron_param_file)
+    best_epoch_model = keras.models.load_model(epoch_param_file)
+    
+    #test the best layer model
+    X_train, X_val = X_trainval[layer_splits[0]], X_trainval[layer_splits[1]]
+    y_train, y_val = y_trainval[layer_splits[0]], y_trainval[layer_splits[1]]
+    
+    print(f'With layer model {best_layer} ({sum(best_layer)} layers):')
+    _, accuracy = best_layer_model.evaluate(X_train, y_train)
+    print(f'Achieved training accuracy of {accuracy}')   
+    _, accuracy = best_layer_model.evaluate(X_val, y_val)
+    print(f'Achieved validation accuracy of {accuracy}')
+    _, accuracy = best_layer_model.evaluate(X_test, y_test)
+    print(f'Achieved test accuracy of {accuracy}')
+    
+    #test the best neuron model
+    X_train, X_val = X_trainval[neuron_splits[0]], X_trainval[neuron_splits[1]]
+    y_train, y_val = y_trainval[neuron_splits[0]], y_trainval[neuron_splits[1]]
+    
+    print(f'With hidden layer total parameter count of {best_neuron}:')
+    _, accuracy = best_neuron_model.evaluate(X_train, y_train)
+    print(f'Achieved training accuracy of {accuracy}')   
+    _, accuracy = best_neuron_model.evaluate(X_val, y_val)
+    print(f'Achieved validation accuracy of {accuracy}')
+    _, accuracy = best_neuron_model.evaluate(X_test, y_test)
+    print(f'Achieved test accuracy of {accuracy}')
+    
   
+    #test the best epoch model
+    X_train, X_val = X_trainval[epoch_splits[0]], X_trainval[epoch_splits[1]]
+    y_train, y_val = y_trainval[epoch_splits[0]], y_trainval[epoch_splits[1]]
+    
+    print(f'With epoch count of {best_epoch}:')
+    _, accuracy = best_epoch_model.evaluate(X_train, y_train)
+    print(f'Achieved training accuracy of {accuracy}')
+    _, accuracy =  best_epoch_model.evaluate(X_val, y_val)
+    print(f'Achieved validation accuracy of {accuracy}')
+    _, accuracy =  best_epoch_model.evaluate(X_test, y_test)
+    print(f'Achieved test accuracy of {accuracy}')
+    
+  train_validate_test_performance('best_layer_model.h5', 'best_neuron_model.h5', 'best_epoch_model.h5', layer_splits, neuron_splits, epoch_splits, best_layer, best_neuron, best_epoch)
+    
+    
+thyroid_autoexperiments('Thyroid_Diff.csv')
   
   
   
 # model, validation_performance = thyroid_cancer_recurrence_model('Thyroid_Diff.csv')
 
-thyroid_autoexperiments('Thyroid_Diff.csv')
